@@ -15,3 +15,61 @@ entity req_latch is
         pending    : out std_logic_vector(7 downto 0)     -- latched requests
     );
 end req_latch;
+
+architecture rtl of req_latch is
+
+    signal pending_reg : std_logic_vector(7 downto 0) := (others => '0');
+    signal key0_prev   : std_logic := '1';   -- track last KEY0 state
+    signal key0_edge   : std_logic := '0';   -- detect falling edge
+
+begin
+
+    -- Output assignment
+    pending <= pending_reg;
+
+    -- Detect falling edge of KEY0 because it is active low
+
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            key0_edge <= '0';
+
+            if key0_prev = '1' and key0 = '0' then
+                key0_edge <= '1';    -- falling edge detected
+            end if;
+
+            key0_prev <= key0;
+        end if;
+    end process;
+
+    -- Request latching and clearing logic
+    process(clk)
+        variable floor_index : integer range 0 to 7;
+    begin
+        if rising_edge(clk) then
+
+            -- HARD RESET
+            if reset_hard = '1' then
+                pending_reg <= (others => '0');
+
+            -- SOFT RESET
+            elsif reset_soft = '1' then
+                pending_reg <= (others => '0');
+
+            else
+                -- Convert SW2..SW0 to floor index
+                floor_index := to_integer(unsigned(floor_bin));
+
+                -- Add request on KEY0 press
+                if key0_edge = '1' then
+                    pending_reg(floor_index) <= '1';
+                end if;
+
+                -- Clear request when instructed by FSM
+                pending_reg <= pending_reg and (not clear_floor);
+
+            end if;
+        end if;
+    end process;
+
+end rtl;
