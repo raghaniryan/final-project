@@ -35,6 +35,7 @@ entity controller_fsm is
         door_open_led : out std_logic
     );
 end controller_fsm;
+
 architecture rtl of controller_fsm is
 
     -- FSM States
@@ -72,29 +73,79 @@ begin
 
     -- ESTOP Toggle Detection
     process(clk)
-    begin
-        if rising_edge(clk) then
+begin
+    if rising_edge(clk) then
 
-            estop_edge <= '0';
+        estop_edge <= '0';
 
-            if estop_prev = '1' and estop_btn = '0' then
-                estop_edge <= '1';   -- falling edge detected
-            end if;
-
-            estop_prev <= estop_btn;
-
-            if estop_edge = '1' then
-                estop_active <= not estop_active;
-            end if;
-
+        if estop_prev = '1' and estop_btn = '0' then
+            estop_edge <= '1';   -- falling edge detected
         end if;
+
+        estop_prev <= estop_btn;
+
+    end if;
+end process;
+
+
+    -- Next state combinational logic 
+    process(state, pending, sched_dir, sched_floor, door_timer, floor_reg)
+    begin
+        next_state <= state;
+
+        case state is
+
+            when INIT =>
+                next_state <= IDLE;
+
+            when IDLE =>
+                if pending /= "00000000" then
+                    next_state <= SCHEDULE;
+                end if;
+
+            when SCHEDULE =>
+                case sched_dir is
+                    when DIR_UP   => next_state <= MOVE_UP;
+                    when DIR_DOWN => next_state <= MOVE_DOWN;
+                    when others   => next_state <= IDLE;
+                end case;
+
+            when MOVE_UP =>
+                if floor_reg = sched_floor then next_state <= ARRIVE; end if;
+
+            when MOVE_DOWN =>
+                if floor_reg = sched_floor then next_state <= ARRIVE; end if;
+
+            when ARRIVE =>
+                next_state <= DOOR_OPEN;
+
+            when DOOR_OPEN =>
+                if door_timer = 3 then next_state <= DOOR_CLOSE; end if;
+
+            when DOOR_CLOSE =>
+                next_state <= IDLE;
+
+            when ESTOP =>
+                next_state <= ESTOP;
+
+        end case;
     end process;
 
-    -- HARD RESET HAS PRIORITY over everything
+
+    -- Single sequential process 
     process(clk)
     begin
         if rising_edge(clk) then
 
+            -- Default outputs
+            clear_floor   <= (others => '0');
+            door_open_led <= '0';
+				
+				if estop_edge = '1' then
+					estop_active <= not estop_active;
+				end if;
+
+            -- Hard reset
             if reset_hard = '1' then
                 state        <= INIT;
                 dir_reg      <= DIR_IDLE;
@@ -103,153 +154,71 @@ begin
                 door_timer   <= 0;
                 estop_active <= '0';
 
+            -- ESTOP
             elsif estop_active = '1' then
                 state <= ESTOP;
+                travel_timer <= 0;
+                door_timer   <= 0;
 
+            -- Normal fsm logic
             else
-                state <= next_state;  
-            end if;
+                state <= next_state;
 
-        end if;
-    end process;
+                -- Travel logic
+                if tick_1hz = '1' then
 
-    -- FSM NEXT STATE LOGIC
-    process(state, pending, tick_1hz, sched_dir, sched_floor, travel_timer, door_timer, floor_reg)
-    begin
-        next_state <= state;
+                    case state is
+                        when MOVE_UP =>
+                            travel_timer <= travel_timer + 1;
+                            if travel_timer = 2 then
+                                travel_timer <= 0;
+                                floor_reg <= floor_reg + 1;
+                            end if;
 
-        case state is
+                        when MOVE_DOWN =>
+                            travel_timer <= travel_timer + 1;
+                            if travel_timer = 2 then
+                                travel_timer <= 0;
+                                floor_reg <= floor_reg - 1;
+                            end if;
 
-            -- INIT
-            when INIT =>
-                next_state <= IDLE;
-
-            -- IDLE
-            when IDLE =>
-                if pending /= "00000000" then
-                    next_state <= SCHEDULE;
-                else
-                    next_state <= IDLE;
-                end if;
-
-            -- SCHEDULE
-            when SCHEDULE =>
-                case sched_dir is
-                    when DIR_UP   => next_state <= MOVE_UP;
-                    when DIR_DOWN => next_state <= MOVE_DOWN;
-                    when others   => next_state <= IDLE;
-                end case;
-
-            -- MOVE UP
-            when MOVE_UP =>
-                if floor_reg = sched_floor then
-                    next_state <= ARRIVE;
-                else
-                    next_state <= MOVE_UP;
-                end if;
-
-            -- MOVE DOWN
-            when MOVE_DOWN =>
-                if floor_reg = sched_floor then
-                    next_state <= ARRIVE;
-                else
-                    next_state <= MOVE_DOWN;
-                end if;
-
-            -- ARRIVE (clear request)
-            when ARRIVE =>
-                next_state <= DOOR_OPEN;
-
-            -- DOOR OPEN (stay 3 seconds)
-            when DOOR_OPEN =>
-                if door_timer = 3 then
-                    next_state <= DOOR_CLOSE;
-                else
-                    next_state <= DOOR_OPEN;
-                end if;
-
-            -- DOOR CLOSE (instant)
-            when DOOR_CLOSE =>
-                next_state <= IDLE;
-
-            -- ESTOP
-            when ESTOP =>
-                next_state <= ESTOP;  -- locked until toggle released
-
-        end case;
-    end process;
-
-    -- FSM OUTPUT + TIMING BEHAVIOR
-   process(clk)
-    begin
-        if rising_edge(clk) then
-
-            clear_floor   <= (others => '0');
-            door_open_led <= '0';
-
-            -- TRAVEL LOGIC (2 seconds per floor)
-				if tick_1hz = '1' then
-
-					case state is
-
-                    when MOVE_UP =>
-                        travel_timer <= travel_timer + 1;
-                        if travel_timer = 2 then
+                        when others =>
                             travel_timer <= 0;
-                            floor_reg <= floor_reg + 1;
-                        end if;
+                    end case;
 
-                    when MOVE_DOWN =>
-                        travel_timer <= travel_timer + 1;
-                        if travel_timer = 2 then
-                            travel_timer <= 0;
-                            floor_reg <= floor_reg - 1;
-                        end if;
+                    -- Door timing
+                    case state is
+                        when DOOR_OPEN =>
+                            door_timer <= door_timer + 1;
+                        when DOOR_CLOSE | IDLE =>
+                            door_timer <= 0;
+                        when others =>
+                            null;
+                    end case;
+                end if;
 
-                    when others =>
-                        travel_timer <= 0;
-                end case;
+                -- Clear request
+                if state = ARRIVE then
+                    clear_floor(floor_reg) <= '1';
+                end if;
 
+                -- Door LED
+                if state = DOOR_OPEN then
+                    door_open_led <= '1';
+                end if;
 
-
-                -- DOOR TIMER LOGIC (3 seconds open)
+                -- Direction output
                 case state is
-                    when DOOR_OPEN =>
-                        door_timer <= door_timer + 1;
-                    when DOOR_CLOSE | IDLE =>
-                        door_timer <= 0;
-
+                    when SCHEDULE =>
+                        dir_reg <= sched_dir;
+                    when MOVE_UP =>
+                        dir_reg <= DIR_UP;
+                    when MOVE_DOWN =>
+                        dir_reg <= DIR_DOWN;
                     when others =>
-                        null;
+                        dir_reg <= DIR_IDLE;
                 end case;
-
             end if;
-
-            -- ARRIVE: clear floor request
-            if state = ARRIVE then
-                clear_floor(floor_reg) <= '1';
-            end if;
-
-            -- Door LED active in DOOR_OPEN
-            if state = DOOR_OPEN then
-                door_open_led <= '1';
-            end if;
-
-            -- Direction Updates
-            case state is
-                when SCHEDULE =>
-                    dir_reg <= sched_dir;
-
-                when MOVE_UP =>
-                    dir_reg <= DIR_UP;
-
-                when MOVE_DOWN =>
-                    dir_reg <= DIR_DOWN;
-
-                when others =>
-                    dir_reg <= DIR_IDLE;
-            end case;;
-
         end if;
     end process;
 
