@@ -3,6 +3,7 @@
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
+use work.elevator_types.all;
 
 entity controller_fsm is
     port (
