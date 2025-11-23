@@ -70,10 +70,6 @@ begin
     current_floor <= floor_reg;
     direction     <= dir_reg;
 
-    -- Clear floor output default
-    clear_floor <= (others => '0');
-    door_open_led <= '0';
-
     -- ESTOP Toggle Detection
     process(clk)
     begin
@@ -111,7 +107,7 @@ begin
                 state <= ESTOP;
 
             else
-                state <= next_state;  -- normal FSM progression
+                state <= next_state;  
             end if;
 
         end if;
@@ -184,14 +180,17 @@ begin
     end process;
 
     -- FSM OUTPUT + TIMING BEHAVIOR
-    process(clk)
+   process(clk)
     begin
         if rising_edge(clk) then
 
-            -- TRAVEL LOGIC (2 seconds per floor)
-            if tick_1hz = '1' then
+            clear_floor   <= (others => '0');
+            door_open_led <= '0';
 
-                case state is
+            -- TRAVEL LOGIC (2 seconds per floor)
+				if tick_1hz = '1' then
+
+					case state is
 
                     when MOVE_UP =>
                         travel_timer <= travel_timer + 1;
@@ -211,12 +210,15 @@ begin
                         travel_timer <= 0;
                 end case;
 
+
+
                 -- DOOR TIMER LOGIC (3 seconds open)
                 case state is
                     when DOOR_OPEN =>
                         door_timer <= door_timer + 1;
                     when DOOR_CLOSE | IDLE =>
                         door_timer <= 0;
+
                     when others =>
                         null;
                 end case;
@@ -231,8 +233,6 @@ begin
             -- Door LED active in DOOR_OPEN
             if state = DOOR_OPEN then
                 door_open_led <= '1';
-            else
-                door_open_led <= '0';
             end if;
 
             -- Direction Updates
@@ -248,7 +248,7 @@ begin
 
                 when others =>
                     dir_reg <= DIR_IDLE;
-            end case;
+            end case;;
 
         end if;
     end process;
