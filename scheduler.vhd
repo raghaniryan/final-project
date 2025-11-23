@@ -39,22 +39,20 @@ begin
     begin
 
         -- Scan ABOVE current floor for the nearest request
-        for f in current_floor+1 to 7 loop
-            if pending(f) = '1' then
-                above_target := f;
-                found_above := true;
-                exit;   -- nearest above found
-            end if;
-        end loop;
+			for f in 0 to 7 loop
+				if (f > current_floor) and (pending(f) = '1') and (not found_above) then
+					found_above  := true;
+					above_target := f;
+				end if;
+			end loop;
 
         -- Scan BELOW current floor for nearest request
-        for f in current_floor-1 downto 0 loop
-            if pending(f) = '1' then
-                below_target := f;
-                found_below := true;
-                exit;   -- nearest below found
-            end if;
-        end loop;
+			for f in 7 downto 0 loop
+				if (f < current_floor) and (pending(f) = '1') and (not found_below) then
+					found_below  := true;
+					below_target := f;
+				end if;
+			end loop;
 
         -- Save found status into signals
         have_above <= found_above;
