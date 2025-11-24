@@ -168,8 +168,8 @@ begin
                 travel_timer <= 0;
                 door_timer   <= 0;
 
-
---            else
+            else
+				
                 -- movement goes before state update
                 if tick_1hz = '1' then
 
