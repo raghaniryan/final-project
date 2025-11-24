@@ -11,7 +11,7 @@ entity req_latch is
         clk        : in  std_logic;                      -- 50 MHz clock
         reset_soft : in  std_logic;                      -- clears pending requests only
         reset_hard : in  std_logic;                      -- clears everything
-        key0       : in  std_logic;                      -- active-low confirm button
+        key0       : in  std_logic;                      -- active high (note: to debug potentially)
         floor_bin  : in  std_logic_vector(2 downto 0);   -- from SW2 to SW0
         clear_floor: in  std_logic_vector(7 downto 0);    -- from FSM when serving a floor
         pending    : out std_logic_vector(7 downto 0)     -- latched requests
@@ -21,7 +21,7 @@ end req_latch;
 architecture rtl of req_latch is
 
     signal pending_reg : std_logic_vector(7 downto 0) := (others => '0');
-    signal key0_prev   : std_logic := '1';   -- track last KEY0 state
+    signal key0_prev   : std_logic := '0';   -- active high
     signal key0_edge   : std_logic := '0';   -- detect falling edge
 
 begin
@@ -37,38 +37,46 @@ begin
             key0_edge <= '0';
 
             if key0_prev = '0' and key0 = '1' then
-					key0_edge <= '1';    -- rising edge
+					key0_edge <= '1';     -- rising edge detect
 				end if;
 
-            key0_prev <= key0;
+				key0_prev <= key0;
         end if;
     end process;
 
     -- Request latching and clearing logic
     process(clk)
-        variable floor_index : integer range 0 to 7;
+        variable tmp : std_logic_vector(7 downto 0); -- temp storage to prevent overwrite
+		  variable floor_index : integer range 0 to 7;
     begin
         if rising_edge(clk) then
 
-            -- HARD RESET
+            -- Hard reset
             if reset_hard = '1' then
                 pending_reg <= (others => '0');
 
-            -- SOFT RESET
+            -- Soft reset
             elsif reset_soft = '1' then
                 pending_reg <= (others => '0');
 
             else
                 -- Convert SW2..SW0 to floor index
                 floor_index := to_integer(unsigned(floor_bin));
-
-                -- Add request on KEY0 press
+					 
+					 -- Start with pending register
+					 tmp := pending_reg;
+					 
+					 -- Clear floor first
+					 tmp := tmp and (not clear_floor);
+					 
+                -- Add new request after clear
                 if key0_edge = '1' then
-                    pending_reg(floor_index) <= '1';
+                    tmp(floor_index) := '1';
                 end if;
 
-                -- Clear request when instructed by FSM
-                pending_reg <= pending_reg and (not clear_floor);
+                
+                -- Store result back to register
+                pending_reg <= tmp;
 
             end if;
         end if;
