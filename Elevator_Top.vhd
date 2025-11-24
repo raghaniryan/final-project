@@ -2,7 +2,7 @@
 
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
-use IEEE.NUMERIC_STD.ALL; -- Required for integer to vector conversion
+use IEEE.NUMERIC_STD.ALL; 
 
 entity Elevator_Top is
     Port (
@@ -111,7 +111,5 @@ begin
     LEDR(3) <= wire_led_estop;
     
     LEDR(7 downto 5) <= std_logic_vector(to_unsigned(current_floor_int, 3)); 
--- debug line
-LEDR(9) <= tick_1hz;	 
 
 end Structural;
