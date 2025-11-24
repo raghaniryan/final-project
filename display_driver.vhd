@@ -49,7 +49,7 @@ architecture rtl of display_driver is
                 return "1010000";   -- d
 
             when DIR_IDLE =>
-                return "1111001";    -- i
+                return "1111011";    -- i
 					 
         end case;
     end function;
