@@ -1,39 +1,34 @@
 -- Ryan Raghani – 301623888; Danny Woo – 301613129; Mitchell Kieper – 301590274
 
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-use work.elevator_types.all;
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
 
 entity controller_fsm is
-    port(
-        clk          : in  std_logic;
-        tick_1hz     : in  std_logic;
-
-        reset_hard   : in  std_logic;
-        reset_soft   : in  std_logic;
-
-        estop_btn    : in  std_logic;
-
-        pending       : in  std_logic_vector(7 downto 0);
-        clear_floor   : out std_logic_vector(7 downto 0);
-
-        sched_dir     : in direction_t;
-        sched_floor   : in integer range 0 to 7;
-
+    Generic (
+        N_FLOORS        : integer := 8;
+        TRAVEL_COUNT    : integer := 1;  
+        DOOR_OPEN_COUNT : integer := 2  
+    );
+    Port (
+        clk           : in  STD_LOGIC;
+        tick_1hz      : in  STD_LOGIC;
+        rst_hard_n    : in  STD_LOGIC;
+        rst_soft_n    : in  STD_LOGIC;
+        estop_n       : in  STD_LOGIC;
+        pending       : in  STD_LOGIC_VECTOR(N_FLOORS-1 downto 0);
         current_floor : out integer range 0 to 7;
-        direction     : out direction_t;
-        door_open_led : out std_logic
+        direction     : out STD_LOGIC_VECTOR(1 downto 0);
+        state_code    : out STD_LOGIC_VECTOR(2 downto 0)
     );
 end controller_fsm;
 
-architecture rtl of controller_fsm is
+architecture Behavioral of controller_fsm is
 
     -- States
     type state_t is (
         INIT,
         IDLE,
-        SCHEDULE,
         MOVE_UP,
         MOVE_DOWN,
         ARRIVE,
@@ -41,189 +36,232 @@ architecture rtl of controller_fsm is
         DOOR_CLOSE,
         ESTOP
     );
-
+    
     signal state, next_state : state_t;
 
-    -- Registers
-    signal floor_reg    : integer range 0 to 7 := 0;
-    signal dir_reg      : direction_t := DIR_IDLE;
+    -- Registers 
+    signal floor_reg     : integer range 0 to 7 := 0; -- Current floor register
+    signal travel_timer  : integer := 0;              -- Timer used for both travel and door
+    signal dir_reg       : std_logic_vector(1 downto 0) := "00"; -- Direction register
 
-    signal travel_timer : integer range 0 to 2 := 0;
-    signal door_timer   : integer range 0 to 3 := 0;
+    signal pending_latched : std_logic_vector(N_FLOORS-1 downto 0) := (others => '0'); -- Latched requests
+    
+    -- Scheduler Logic Signals 
+    signal req_above : std_logic;
+    signal req_below : std_logic;
+    signal req_here  : std_logic;
+    
+    -- Debounce and Timing Completion signals
+    signal debounce_cnt : integer range 0 to 500000 := 0;
+    signal sw_sampled   : std_logic_vector(N_FLOORS-1 downto 0) := (others => '0');
+    signal sw_prev      : std_logic_vector(N_FLOORS-1 downto 0) := (others => '0');
+    
+    signal travel_done : boolean;
+    signal door_done   : boolean;
 
-    -- estop toggle
-    signal estop_prev   : std_logic := '1';
-    signal estop_edge   : std_logic := '0';
-    signal estop_active : std_logic := '0';
 
-    -- Output assignments
 begin
+
     current_floor <= floor_reg;
     direction     <= dir_reg;
-
-    -- ESTOP edge detect
-    process(clk)
+    
+    -- State Code Output Mapping (Used by the display_driver)
+    process(state)
     begin
-        if rising_edge(clk) then
-            estop_edge <= '0';
-            if estop_prev = '1' and estop_btn = '0' then
-                estop_edge <= '1';
-            end if;
-            estop_prev <= estop_btn;
-        end if;
+        case state is
+            when INIT       => state_code <= "000";
+            when IDLE       => state_code <= "001";
+            when MOVE_UP    => state_code <= "010";
+            when MOVE_DOWN  => state_code <= "011";
+            when ARRIVE     => state_code <= "100";
+            when DOOR_OPEN  => state_code <= "101";
+            when DOOR_CLOSE => state_code <= "110";
+            when ESTOP      => state_code <= "111";
+        end case;
     end process;
 
-
-    -- Combinational block for next_state and combinational outputs
-	 process(state, pending, sched_dir, sched_floor, door_timer, floor_reg)
-	 begin
-		-- default values
-		next_state    <= state;
-		door_open_led <= '0';
-
-		case state is
-
-			-- INIT 
-			when INIT =>
-				next_state <= IDLE;
-
-			-- IDLE 
-			when IDLE =>
-            if pending /= "00000000" then
-                next_state <= SCHEDULE;
-            end if;
-
-			-- Schedule
-			when SCHEDULE =>
-            case sched_dir is
-                when DIR_UP   => next_state <= MOVE_UP;
-                when DIR_DOWN => next_state <= MOVE_DOWN;
-                when others   => next_state <= IDLE;
-            end case;
-
-			-- Move up
-			when MOVE_UP =>
-            if floor_reg = sched_floor then
-                next_state <= ARRIVE;
-            end if;
-
-			-- Move down
-			when MOVE_DOWN =>
-            if floor_reg = sched_floor then
-                next_state <= ARRIVE;
-            end if;
-
-			-- Arrive
-			when ARRIVE =>
-            clear_floor(floor_reg) <= '1';   -- one cycle
-            next_state <= DOOR_OPEN;
-
-			-- Door open
-			when DOOR_OPEN =>
-            door_open_led <= '1';
-            if door_timer = 3 then
-                next_state <= DOOR_CLOSE;
-            end if;
-
-			-- Door close
-        when DOOR_CLOSE =>
-            next_state <= IDLE;
-
-			-- ESTOP 
-        when ESTOP =>
-            next_state <= ESTOP;
-
-		end case;
-	end process;
-
-
-    -- Sequenctial block where all registers update
-    process(clk)
+    -- Scheduler logic (Combinational)
+    process(pending_latched, floor_reg)
+        variable v_above : boolean := false;
+        variable v_below : boolean := false;
     begin
-        if rising_edge(clk) then
+        v_above := false;
+        v_below := false;
+        for i in 0 to N_FLOORS-1 loop
+            if pending_latched(i) = '1' then
+                if i > floor_reg then v_above := true; end if;
+                if i < floor_reg then v_below := true; end if;
+            end if;
+        end loop;
+        if v_above then req_above <= '1'; else req_above <= '0'; end if;
+        if v_below then req_below <= '1'; else req_below <= '0'; end if;
+        req_here <= pending_latched(floor_reg);
+    end process;
 
-            -- Hard reset
-            if reset_hard = '1' then
-                state        <= INIT;
-                floor_reg    <= 0;
-                dir_reg      <= DIR_IDLE;
+    -- Timing Completion Checks
+    travel_done <= (travel_timer >= TRAVEL_COUNT);
+    door_done   <= (travel_timer >= DOOR_OPEN_COUNT);
+    
+    -- Combinational state logic
+    process(state, req_here, req_above, req_below, dir_reg, travel_done, door_done, tick_1hz, rst_soft_n)
+    begin
+        next_state <= state;
+        
+        case state is
+            when INIT =>
+                next_state <= IDLE;
+            when IDLE =>
+                if req_here = '1' then
+                    next_state <= ARRIVE;
+                elsif req_above = '1' then
+                    next_state <= MOVE_UP;
+                elsif req_below = '1' then
+                    next_state <= MOVE_DOWN;
+                end if;
+
+            when MOVE_UP =>
+                -- Stable transition based on timer completion gated by 1Hz tick
+                if tick_1hz = '1' and travel_done then
+                    next_state <= ARRIVE;
+                end if;
+
+            when MOVE_DOWN =>
+                if tick_1hz = '1' and travel_done then
+                     next_state <= ARRIVE;
+                end if;
+
+            when ARRIVE =>
+                next_state <= DOOR_OPEN;
+
+            when DOOR_OPEN =>
+                if tick_1hz = '1' and door_done then
+                    next_state <= DOOR_CLOSE;
+                end if;
+
+            when DOOR_CLOSE =>
+                -- Scheduling policy
+                if req_here = '1' then
+                    next_state <= ARRIVE;
+                else
+                    if dir_reg = "01" then -- Moving UP
+                        if req_above = '1' then next_state <= MOVE_UP;
+                        elsif req_below = '1' then next_state <= MOVE_DOWN;
+                        else next_state <= IDLE;
+                        end if;
+                    elsif dir_reg = "10" then -- Moving DOWN
+                        if req_below = '1' then next_state <= MOVE_DOWN;
+                        elsif req_above = '1' then next_state <= MOVE_UP;
+                        else next_state <= IDLE;
+                        end if;
+                    else
+                        next_state <= IDLE;
+                    end if;
+                end if;
+
+            when ESTOP =>
+                -- Exit ESTOP on Active Low Soft Reset
+                if rst_soft_n = '0' then
+                    next_state <= IDLE;
+                end if;
+
+            when others =>
+                next_state <= INIT;
+        end case;
+    end process;
+
+    -- Sequential logic (Updates on rising_edge(clk))
+    process(clk, rst_hard_n)
+    begin
+        -- Hard Reset (Active Low)
+        if rst_hard_n = '0' then
+            state <= INIT;
+            floor_reg <= 0;
+            travel_timer <= 0;
+            dir_reg <= "00";
+            pending_latched <= (others => '0');
+            sw_sampled <= (others => '0');
+            sw_prev <= (others => '0');
+            debounce_cnt <= 0;
+            
+        elsif rising_edge(clk) then
+            
+            -- ESTOP Priority (Active Low)
+            if estop_n = '0' then
+                state <= ESTOP;
+            
+            -- Soft Reset Priority (Active Low)
+            elsif rst_soft_n = '0' then
+                pending_latched <= (others => '0'); -- Clear requests
                 travel_timer <= 0;
-                door_timer   <= 0;
-                estop_active <= '0';
+                state <= IDLE;
 
-            -- ESTOP toggle latching
-            elsif estop_edge = '1' then
-                estop_active <= not estop_active;
-
-
-            elsif estop_active = '1' then
-                state        <= ESTOP;
-                travel_timer <= 0;
-                door_timer   <= 0;
-
-            -- Soft reset
-            elsif reset_soft = '1' then
-                state        <= IDLE;
-                travel_timer <= 0;
-                door_timer   <= 0;
-
-            -- Normal operation
+            -- Normal Operation
             else
-
-                -- update state
                 state <= next_state;
+                
+                -- Debouncer
+                if debounce_cnt < 500000 then 
+                    debounce_cnt <= debounce_cnt + 1;
+                else
+                    debounce_cnt <= 0;
+                    sw_sampled <= pending;
+                end if;
+                
+                -- Request latching/clearing logic
+                for i in 0 to N_FLOORS-1 loop
+                    -- Latching (TR-3)
+                    if (sw_sampled(i) = '1' and sw_prev(i) = '0') then
+                        pending_latched(i) <= '1';
+                    end if;
+                end loop;
+                
+                -- Request Clearing
+                if state = DOOR_OPEN then
+                    pending_latched(floor_reg) <= '0';
+                end if;
 
-                -- Movement (uses next_state)
-                if tick_1hz = '1' then
+                if debounce_cnt = 0 then
+                    sw_prev <= sw_sampled;
+                end if;
+                
+                -- Timer updates (Gated by 1Hz clock)
+                if state /= next_state then
+                    travel_timer <= 0;
+                elsif tick_1hz = '1' then
+                    travel_timer <= travel_timer + 1;
+                end if;
 
-                    case next_state is
-                        when MOVE_UP =>
-                            travel_timer <= travel_timer + 1;
-                            if travel_timer = 2 then
-                                travel_timer <= 0;
-                                floor_reg <= floor_reg + 1;
-                            end if;
+                -- Floor updates (Gated by 1Hz clock and timer completion)
+                if state = MOVE_UP and tick_1hz = '1' and travel_done then
+                    if floor_reg < N_FLOORS-1 then
+                        floor_reg <= floor_reg + 1;
+                    end if;
+                elsif state = MOVE_DOWN and tick_1hz = '1' and travel_done then
+                    if floor_reg > 0 then
+                        floor_reg <= floor_reg - 1;
+                    end if;
+                end if;
 
-                        when MOVE_DOWN =>
-                            travel_timer <= travel_timer + 1;
-                            if travel_timer = 2 then
-                                travel_timer <= 0;
-                                floor_reg <= floor_reg - 1;
-                            end if;
-
-                        when others =>
-                            travel_timer <= 0;
-                    end case;
-
-                    -- DOOR TIMER
-                    case next_state is
-                        when DOOR_OPEN =>
-                            door_timer <= door_timer + 1;
-                        when IDLE | DOOR_CLOSE =>
-                            door_timer <= 0;
-                        when others =>
-                            null;
-                    end case;
-
-                end if; -- tick_1hz
-
-                -- Direction register
-                case next_state is
-                    when SCHEDULE =>
-                        dir_reg <= sched_dir;
-
-                    when MOVE_UP =>
-                        dir_reg <= DIR_UP;
-
-                    when MOVE_DOWN =>
-                        dir_reg <= DIR_DOWN;
-
-                    when others =>
-                        dir_reg <= DIR_IDLE;
-                end case;
-
+                -- Direction updates (Scheduled on state change or IDLE)
+                if state = IDLE then
+                    if req_above = '1' then dir_reg <= "01"; 
+                    elsif req_below = '1' then dir_reg <= "10"; 
+                    else dir_reg <= "00";
+                    end if;
+                elsif state = DOOR_CLOSE then
+                    -- Re-evaluate direction based on scheduling policy
+                    if req_here = '0' then
+                        if dir_reg = "01" and req_above = '0' and req_below = '1' then
+                            dir_reg <= "10";
+                        elsif dir_reg = "10" and req_below = '0' and req_above = '1' then
+                            dir_reg <= "01";
+                        elsif req_above = '0' and req_below = '0' then
+                            dir_reg <= "00";
+                        end if;
+                    end if;
+                end if;
             end if;
         end if;
     end process;
 
-end rtl;
+end Behavioral;
