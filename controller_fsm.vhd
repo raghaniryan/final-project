@@ -146,13 +146,13 @@ begin
             clear_floor   <= (others => '0');
             door_open_led <= '0';
 
-            -- ESTOP toggle
+            -- toggle ESTOP
             if estop_edge = '1' then
                 estop_active <= not estop_active;
             end if;
 
 
-            -- Hard reset
++            -- Hard reset
             if reset_hard = '1' then
                 state        <= INIT;
                 floor_reg    <= 0;
@@ -162,18 +162,23 @@ begin
                 estop_active <= '0';
 
 
+            -- ESTOP 
             elsif estop_active = '1' then
-                -- ESTOP holds system frozen
                 state        <= ESTOP;
                 travel_timer <= 0;
                 door_timer   <= 0;
 
+
+            -- Normal operation
             else
-				
-                -- movement goes before state update
+
+                -- Update state first
+                state <= next_state;
+
+                -- Travel timer 
                 if tick_1hz = '1' then
 
-                    case state is
+                    case next_state is
                         when MOVE_UP =>
                             travel_timer <= travel_timer + 1;
                             if travel_timer = 2 then
@@ -194,7 +199,7 @@ begin
 
 
                     -- Door timer
-                    case state is
+                    case next_state is
                         when DOOR_OPEN =>
                             door_timer <= door_timer + 1;
                         when IDLE | DOOR_CLOSE =>
@@ -206,20 +211,20 @@ begin
                 end if;
 
 
-                -- Clear floor request  when arrived
-                if state = ARRIVE then
+                -- Clear floor when arrives
+                if next_state = ARRIVE then
                     clear_floor(floor_reg) <= '1';
                 end if;
 
 
                 -- Door LED
-                if state = DOOR_OPEN then
+                if next_state = DOOR_OPEN then
                     door_open_led <= '1';
                 end if;
 
 
                 -- Direction logic
-                case state is
+                case next_state is
                     when SCHEDULE =>
                         dir_reg <= sched_dir;
 
@@ -233,11 +238,8 @@ begin
                         dir_reg <= DIR_IDLE;
                 end case;
 
-
-                -- Update the state last
-                state <= next_state;
-
             end if;
         end if;
     end process;
+
 end rtl;
