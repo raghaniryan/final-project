@@ -36,9 +36,9 @@ begin
         if rising_edge(clk) then
             key0_edge <= '0';
 
-            if key0_prev = '1' and key0 = '0' then
-                key0_edge <= '1';    -- falling edge detected
-            end if;
+            if key0_prev = '0' and key0 = '1' then
+					key0_edge <= '1';    -- rising edge
+				end if;
 
             key0_prev <= key0;
         end if;
