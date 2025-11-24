@@ -152,7 +152,7 @@ begin
             end if;
 
 
-+            -- Hard reset
+            -- Hard reset
             if reset_hard = '1' then
                 state        <= INIT;
                 floor_reg    <= 0;
