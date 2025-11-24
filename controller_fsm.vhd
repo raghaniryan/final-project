@@ -143,7 +143,6 @@ begin
     begin
         if rising_edge(clk) then
 
-            -- Default outputs for each cycle
             clear_floor   <= (others => '0');
             door_open_led <= '0';
 
@@ -153,9 +152,8 @@ begin
             end if;
 
 
-            -- Hard reset takes precidence
+            -- Hard reset
             if reset_hard = '1' then
-
                 state        <= INIT;
                 floor_reg    <= 0;
                 dir_reg      <= DIR_IDLE;
@@ -163,22 +161,19 @@ begin
                 door_timer   <= 0;
                 estop_active <= '0';
 
-            -- ESTOP locked state
-            elsif estop_active = '1' then
 
+            elsif estop_active = '1' then
+                -- ESTOP holds system frozen
                 state        <= ESTOP;
                 travel_timer <= 0;
                 door_timer   <= 0;
 
-            -- Normal FSM Progression
-            else
-                state <= next_state;
 
-                -- Travel timing (2 seconds per floor)
+--            else
+                -- movement goes before state update
                 if tick_1hz = '1' then
 
                     case state is
-
                         when MOVE_UP =>
                             travel_timer <= travel_timer + 1;
                             if travel_timer = 2 then
@@ -195,10 +190,10 @@ begin
 
                         when others =>
                             travel_timer <= 0;
-
                     end case;
 
-                    -- Door timer (3 seconds)
+
+                    -- Door timer
                     case state is
                         when DOOR_OPEN =>
                             door_timer <= door_timer + 1;
@@ -211,19 +206,19 @@ begin
                 end if;
 
 
-                -- Clear the floor request upon arrival
+                -- Clear floor request  when arrived
                 if state = ARRIVE then
                     clear_floor(floor_reg) <= '1';
                 end if;
 
-					 
+
                 -- Door LED
                 if state = DOOR_OPEN then
                     door_open_led <= '1';
                 end if;
 
 
-                -- Direction register updates
+                -- Direction logic
                 case state is
                     when SCHEDULE =>
                         dir_reg <= sched_dir;
@@ -238,9 +233,11 @@ begin
                         dir_reg <= DIR_IDLE;
                 end case;
 
-            end if; -- normal operation
 
-        end if; -- rising edge
+                -- Update the state last
+                state <= next_state;
+
+            end if;
+        end if;
     end process;
-
 end rtl;
