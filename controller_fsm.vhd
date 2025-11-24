@@ -103,7 +103,7 @@ begin
     door_done   <= (travel_timer >= DOOR_OPEN_COUNT);
     
     -- Combinational state logic
-    process(state, req_here, req_above, req_below, dir_reg, travel_done, door_done, tick_1hz, rst_soft_n)
+	 process(state, req_here, req_above, req_below, dir_reg, travel_done, door_done, tick_1hz, rst_soft_n)
     begin
         next_state <= state;
         
@@ -120,18 +120,24 @@ begin
                 end if;
 
             when MOVE_UP =>
-                -- Stable transition based on timer completion gated by 1Hz tick
+                -- Always transition to ARRIVE
                 if tick_1hz = '1' and travel_done then
-                    next_state <= ARRIVE;
+                    next_state <= ARRIVE; 
                 end if;
 
             when MOVE_DOWN =>
+                -- Always transition to ARRIVE
                 if tick_1hz = '1' and travel_done then
                      next_state <= ARRIVE;
                 end if;
 
             when ARRIVE =>
-                next_state <= DOOR_OPEN;
+                -- Check for request at the new floor
+                if req_here = '1' then
+                    next_state <= DOOR_OPEN; -- Stop and open door if requested.
+                else
+                    next_state <= DOOR_CLOSE; -- Skip door open if not requested.
+                end if;
 
             when DOOR_OPEN =>
                 if tick_1hz = '1' and door_done then
@@ -159,7 +165,6 @@ begin
                 end if;
 
             when ESTOP =>
-                -- Exit ESTOP on Active Low Soft Reset
                 if rst_soft_n = '0' then
                     next_state <= IDLE;
                 end if;
@@ -168,8 +173,7 @@ begin
                 next_state <= INIT;
         end case;
     end process;
-
-    -- Sequential logic (Updates on rising_edge(clk))
+    -- Sequential logic
     process(clk, rst_hard_n)
     begin
         -- Hard Reset (Active Low)
