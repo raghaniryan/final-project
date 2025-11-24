@@ -65,7 +65,7 @@ begin
             clk         => CLOCK_50,
             reset_soft  => reset_soft,
             reset_hard  => reset_hard,
-            key0        => KEY(0),                  -- falling-edge RAW
+            key0        => confirm,
             floor_bin   => SW(2 downto 0),
             clear_floor => clear_floor,
             pending     => pending_req
