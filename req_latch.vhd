@@ -21,7 +21,7 @@ end req_latch;
 architecture rtl of req_latch is
 
     signal pending_reg : std_logic_vector(7 downto 0) := (others => '0');
-    signal key0_prev   : std_logic := '0';   -- active high
+    signal key0_prev   : std_logic := '1';   -- active high
     signal key0_edge   : std_logic := '0';   -- detect falling edge
 
 begin
@@ -32,18 +32,18 @@ begin
     -- Detect falling edge of KEY0 because it is active low
 
     process(clk)
-    begin
-        if rising_edge(clk) then
-            key0_edge <= '0';
+	 begin
+		if rising_edge(clk) then
+        key0_edge <= '0';
 
-            if key0_prev = '0' and key0 = '1' then
-					key0_edge <= '1';     -- rising edge detect
-				end if;
-
-				key0_prev <= key0;
+        -- correct falling-edge detection for active-low button
+        if key0_prev = '1' and key0 = '0' then
+            key0_edge <= '1';
         end if;
-    end process;
 
+        key0_prev <= key0;
+		end if;
+	end process;
     -- Request latching and clearing logic
     process(clk)
         variable tmp : std_logic_vector(7 downto 0); -- temp storage to prevent overwrite
